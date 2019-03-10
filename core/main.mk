@@ -44,6 +44,9 @@ $(DEFAULT_GOAL): droid_targets
 .PHONY: droid_targets
 droid_targets:
 
+# Include prebuild.mk
+-include device/rockchip/common/prebuild.mk
+
 # Set up various standard variables based on configuration
 # and host information.
 include $(BUILD_SYSTEM)/config.mk
@@ -981,6 +984,9 @@ bptimage: $(INSTALLED_BPTIMAGE_TARGET)
 .PHONY: vendorimage
 vendorimage: $(INSTALLED_VENDORIMAGE_TARGET)
 
+.PHONY: oemimage
+oemimage: $(INSTALLED_OEMIMAGE_TARGET)
+
 .PHONY: systemotherimage
 systemotherimage: $(INSTALLED_SYSTEMOTHERIMAGE_TARGET)
 
@@ -1004,6 +1010,7 @@ droidcore: files \
 	$(INSTALLED_CACHEIMAGE_TARGET) \
 	$(INSTALLED_BPTIMAGE_TARGET) \
 	$(INSTALLED_VENDORIMAGE_TARGET) \
+	$(INSTALLED_OEMIMAGE_TARGET) \
 	$(INSTALLED_SYSTEMOTHERIMAGE_TARGET) \
 	$(INSTALLED_FILES_FILE) \
 	$(INSTALLED_FILES_FILE_VENDOR) \

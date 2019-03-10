@@ -170,6 +170,11 @@ BUILD_KEYS := test-keys
 else
 BUILD_KEYS := dev-keys
 endif
+
+ifeq ($(TARGET_BUILD_VARIANT),user)
+BUILD_KEYS := release-keys
+endif
+
 BUILD_VERSION_TAGS += $(BUILD_KEYS)
 BUILD_VERSION_TAGS := $(subst $(space),$(comma),$(sort $(BUILD_VERSION_TAGS)))
 
@@ -737,6 +742,10 @@ endif
 # This needs to be before the systemimage rules, because it adds to
 # ALL_DEFAULT_INSTALLED_MODULES, which those use to pick which files
 # go into the systemimage.
+INSTALLED_LOADER_TARGET := $(strip $(wildcard $(TARGET_DEVICE_DIR)/ota/loader/RK*Loader*.bin))
+INSTALLED_PARAMETER_TARGET := $(strip $(wildcard $(TARGET_DEVICE_DIR)/ota/parameter/parameter*))
+INSTALLED_UBOOT_TARGET := $(strip $(wildcard u-boot/uboot.img))
+INSTALLED_TRUST_TARGET := $(strip $(wildcard u-boot/trust.img))
 
 .PHONY: notice_files
 
@@ -1058,6 +1067,9 @@ ifneq (,$(INSTALLED_RECOVERYIMAGE_TARGET)$(filter true,$(BOARD_USES_RECOVERY_AS_
 INTERNAL_RECOVERYIMAGE_FILES := $(filter $(TARGET_RECOVERY_OUT)/%, \
     $(ALL_DEFAULT_INSTALLED_MODULES))
 
+build_wifi_ko := $(TOPDIR)device/rockchip/common/build_wifi_ko.sh
+
+recovery_contents := $(TOPDIR)device/rockchip/common/recovery_contents.sh
 recovery_initrc := $(call include-path-for, recovery)/etc/init.rc
 recovery_sepolicy := \
     $(TARGET_RECOVERY_ROOT_OUT)/sepolicy \
@@ -1113,6 +1125,8 @@ ifdef TARGET_RECOVERY_FSTAB
 recovery_fstab := $(TARGET_RECOVERY_FSTAB)
 else
 recovery_fstab := $(strip $(wildcard $(TARGET_DEVICE_DIR)/recovery.fstab))
+recovery_fstab := $(if $(wildcard $(recovery_fstab)), $(recovery_fstab),\
+	device/rockchip/common/recovery.fstab)
 endif
 ifdef TARGET_RECOVERY_WIPE
 recovery_wipe := $(TARGET_RECOVERY_WIPE)
@@ -1215,15 +1229,20 @@ define build-recoveryimage-target
     $(call build-image-kernel-modules,$(BOARD_RECOVERY_KERNEL_MODULES),$(TARGET_RECOVERY_ROOT_OUT),,$(call intermediates-dir-for,PACKAGING,depmod_recovery)))
   $(hide) rm -f $(TARGET_RECOVERY_ROOT_OUT)/init*.rc
   $(hide) cp -f $(recovery_initrc) $(TARGET_RECOVERY_ROOT_OUT)/
+  $(hide) cp $(TARGET_ROOT_OUT)/init.*usb*.rc $(TARGET_RECOVERY_ROOT_OUT)/
   $(hide) cp $(TARGET_ROOT_OUT)/init.recovery.*.rc $(TARGET_RECOVERY_ROOT_OUT)/ || true # Ignore error when the src file doesn't exist.
   $(hide) mkdir -p $(TARGET_RECOVERY_ROOT_OUT)/res
   $(hide) rm -rf $(TARGET_RECOVERY_ROOT_OUT)/res/*
   $(hide) cp -rf $(recovery_resources_common)/* $(TARGET_RECOVERY_ROOT_OUT)/res
   $(hide) cp -f $(recovery_font) $(TARGET_RECOVERY_ROOT_OUT)/res/images/font.png
+  $(build_wifi_ko) $(TARGET_ARCH) $(TARGET_OUT_VENDOR)
+  $(recovery_contents) $(TARGET_PRODUCT) $(PRODUCT_OUT) $(TARGET_BOARD_PLATFORM) $(TARGET_ROCKCHIP_PCBATEST) $(TARGET_ARCH)
   $(hide) $(foreach item,$(TARGET_PRIVATE_RES_DIRS), \
     cp -rf $(item) $(TARGET_RECOVERY_ROOT_OUT)/$(newline))
   $(hide) $(foreach item,$(recovery_fstab), \
     cp -f $(item) $(TARGET_RECOVERY_ROOT_OUT)/etc/recovery.fstab)
+  $(hide) $(foreach item,$(recovery_fstab_nand), \
+	cp -f $(item) $(TARGET_RECOVERY_ROOT_OUT)/etc/recovery.nand.fstab)
   $(if $(strip $(recovery_wipe)), \
     $(hide) cp -f $(recovery_wipe) $(TARGET_RECOVERY_ROOT_OUT)/etc/recovery.wipe)
   $(hide) cp $(RECOVERY_INSTALL_OTA_KEYS) $(TARGET_RECOVERY_ROOT_OUT)/res/keys
@@ -1283,6 +1302,7 @@ $(INSTALLED_BOOTIMAGE_TARGET): $(MKBOOTFS) $(MKBOOTIMG) $(MINIGZIP) $(ADBD) \
 		$(INSTALLED_2NDBOOTLOADER_TARGET) \
 		$(recovery_build_props) $(recovery_resource_deps) \
 		$(recovery_fstab) \
+		$(recovery_fstab_nand) \
 		$(RECOVERY_INSTALL_OTA_KEYS) \
 		$(INSTALLED_VENDOR_DEFAULT_PROP_TARGET) \
 		$(BOARD_RECOVERY_KERNEL_MODULES) \
@@ -2087,6 +2107,7 @@ OTATOOLS :=  $(HOST_OUT_EXECUTABLES)/minigzip \
   $(HOST_OUT_EXECUTABLES)/zipalign \
   $(HOST_OUT_EXECUTABLES)/bsdiff \
   $(HOST_OUT_EXECUTABLES)/imgdiff \
+  $(HOST_OUT_EXECUTABLES)/mkparameter \
   $(HOST_OUT_JAVA_LIBRARIES)/dumpkey.jar \
   $(HOST_OUT_JAVA_LIBRARIES)/signapk.jar \
   $(HOST_OUT_JAVA_LIBRARIES)/BootSignature.jar \
@@ -2222,7 +2243,7 @@ built_ota_tools :=
 # We can't build static executables when SANITIZE_TARGET=address
 ifeq ($(strip $(SANITIZE_TARGET)),)
 built_ota_tools += \
-    $(call intermediates-dir-for,EXECUTABLES,updater,,,$(TARGET_PREFER_32_BIT))/updater
+    $(call intermediates-dir-for,EXECUTABLES,updater,,,,)/updater
 endif
 
 $(BUILT_TARGET_FILES_PACKAGE): PRIVATE_OTA_TOOLS := $(built_ota_tools)
@@ -2276,11 +2297,13 @@ define fs_config
 (cd $(1); find . -type d | sed 's,$$,/,'; find . \! -type d) | cut -c 3- | sort | sed 's,^,$(2),' | $(HOST_OUT_EXECUTABLES)/fs_config -C -D $(TARGET_OUT) -S $(SELINUX_FC)
 endef
 
+BUILT_OTA_OEMIMAGE_TARGET := $(PRODUCT_OUT)/oem/
 # Depending on the various images guarantees that the underlying
 # directories are up-to-date.
 $(BUILT_TARGET_FILES_PACKAGE): \
 		$(INSTALLED_BOOTIMAGE_TARGET) \
 		$(INSTALLED_RADIOIMAGE_TARGET) \
+		$(INSTALLED_PARAMETER_TARGET) \
 		$(INSTALLED_RECOVERYIMAGE_TARGET) \
 		$(FULL_SYSTEMIMAGE_DEPS) \
 		$(INSTALLED_USERDATAIMAGE_TARGET) \
@@ -2288,6 +2311,7 @@ $(BUILT_TARGET_FILES_PACKAGE): \
 		$(INSTALLED_VENDORIMAGE_TARGET) \
 		$(INSTALLED_VBMETAIMAGE_TARGET) \
 		$(INSTALLED_DTBOIMAGE_TARGET) \
+		$(BUILT_OTA_OEMIMAGE_TARGET) \
 		$(INTERNAL_SYSTEMOTHERIMAGE_FILES) \
 		$(INSTALLED_ANDROID_INFO_TXT_TARGET) \
 		$(INSTALLED_KERNEL_TARGET) \
@@ -2316,6 +2340,14 @@ ifneq (,$(INSTALLED_RECOVERYIMAGE_TARGET)$(filter true,$(BOARD_USES_RECOVERY_AS_
 ifdef INSTALLED_KERNEL_TARGET
 	$(hide) cp $(INSTALLED_KERNEL_TARGET) $(zip_root)/$(PRIVATE_RECOVERY_OUT)/kernel
 endif
+
+ifdef BUILT_OTA_OEMIMAGE_TARGET
+	$(warning $(BUILT_OTA_OEMIMAGE_TARGET))
+	$(hide) rm -rf $(zip_root)/OEM
+	$(hide) mkdir -p $(zip_root)/OEM
+	$(hide) cp -rf $(BUILT_OTA_OEMIMAGE_TARGET)/* $(zip_root)/OEM/
+endif
+
 ifdef INSTALLED_2NDBOOTLOADER_TARGET
 	$(hide) cp $(INSTALLED_2NDBOOTLOADER_TARGET) $(zip_root)/$(PRIVATE_RECOVERY_OUT)/second
 endif
@@ -2396,6 +2428,49 @@ endif
 	$(hide) cp $(SELINUX_FC) $(zip_root)/META/file_contexts.bin
 	$(hide) echo "recovery_api_version=$(PRIVATE_RECOVERY_API_VERSION)" > $(zip_root)/META/misc_info.txt
 	$(hide) echo "fstab_version=$(PRIVATE_RECOVERY_FSTAB_VERSION)" >> $(zip_root)/META/misc_info.txt
+ifeq ($(INSTALLED_LOADER_TARGET),)
+	$(info No RK Loader for TARGET_DEVICE $(TARGET_DEVICE) to otapackage)
+else
+	$(info cp RK Loader:$(TARGET_DEVICE) to otapackage)
+	$(hide) cp $(INSTALLED_LOADER_TARGET) $(zip_root)/RKLoader.bin
+endif
+ifeq ($(INSTALLED_UBOOT_TARGET),)
+	$(info No uboot for uboot/uboot.img to otapackage)
+else
+ifeq ($(AB_OTA_UPDATER),true)
+	$(hide) mkdir -p $(zip_root)/IMAGES
+	$(hide) cp $(INSTALLED_UBOOT_TARGET) $(zip_root)/IMAGES/bootloader.img
+else
+	$(hide) cp $(INSTALLED_UBOOT_TARGET) $(zip_root)/uboot.img
+endif
+endif
+
+ifeq ($(INSTALLED_TRUST_TARGET),)
+	$(info No trust for uboot/trust.img to otapackage)
+else
+ifeq ($(AB_OTA_UPDATER),true)
+	$(hide) mkdir -p $(zip_root)/IMAGES
+	$(hide) cp $(INSTALLED_TRUST_TARGET) $(zip_root)/IMAGES/tos.img
+else
+	$(hide) cp $(INSTALLED_TRUST_TARGET) $(zip_root)/trust.img
+endif
+endif
+ifdef TARGET_PREBUILT_RESOURCE
+	$(info package add resource.img to BOOT and RECOVERY)
+	$(hide) cp $(TARGET_PREBUILT_RESOURCE) $(zip_root)/BOOT/resource.img
+ifneq ($(TARGET_NO_RECOVERY),true)
+	$(hide) cp $(TARGET_PREBUILT_RESOURCE) $(zip_root)/RECOVERY/resource.img
+endif
+endif
+
+ifeq ($(INSTALLED_PARAMETER_TARGET),)
+	$(info No parameter for TARGET_DEVICE $(TARGET_DEVICE) to otapackage)
+else
+	$(hide) rm -rf $(zip_root)/PARAMETER
+	$(hide) mkdir -p $(zip_root)/PARAMETER
+	$(hide) $(HOST_OUT_EXECUTABLES)/mkparameter '$(INSTALLED_PARAMETER_TARGET)' $(zip_root)/PARAMETER/parameter
+endif
+
 ifdef BOARD_FLASH_BLOCK_SIZE
 	$(hide) echo "blocksize=$(BOARD_FLASH_BLOCK_SIZE)" >> $(zip_root)/META/misc_info.txt
 endif
@@ -2448,6 +2523,9 @@ endif
 ifeq ($(BOARD_USES_FULL_RECOVERY_IMAGE),true)
 	$(hide) echo "full_recovery_image=true" >> $(zip_root)/META/misc_info.txt
 endif
+ifeq ($(HIGH_RELIABLE_RECOVERY_OTA),true)
+	$(hide) echo "hrr_omit_recovery_image=true" >> $(zip_root)/META/misc_info.txt
+endif
 ifeq ($(BOARD_AVB_ENABLE),true)
 	$(hide) echo "avb_enable=true" >> $(zip_root)/META/misc_info.txt
 	$(hide) echo "avb_vbmeta_key_path=$(BOARD_AVB_KEY_PATH)" >> $(zip_root)/META/misc_info.txt
@@ -2470,8 +2548,10 @@ ifdef BOARD_BPT_DISK_SIZE
 endif
 	$(call generate-userimage-prop-dictionary, $(zip_root)/META/misc_info.txt)
 ifneq ($(INSTALLED_RECOVERYIMAGE_TARGET),)
+ifneq ($(HIGH_RELIABLE_RECOVERY_OTA),true)
 	$(hide) PATH=$(foreach p,$(INTERNAL_USERIMAGES_BINARY_PATHS),$(p):)$$PATH MKBOOTIMG=$(MKBOOTIMG) \
 	    ./build/tools/releasetools/make_recovery_patch $(zip_root) $(zip_root)
+endif
 endif
 ifeq ($(AB_OTA_UPDATER),true)
 	@# When using the A/B updater, include the updater config files in the zip.
@@ -2612,7 +2692,7 @@ else
 $(INTERNAL_OTA_PACKAGE_TARGET): $(BRO)
 endif
 
-$(INTERNAL_OTA_PACKAGE_TARGET): $(BUILT_TARGET_FILES_PACKAGE) \
+$(INTERNAL_OTA_PACKAGE_TARGET): $(BUILT_TARGET_FILES_PACKAGE) $(HOST_OUT_EXECUTABLES)/mkparameter \
 		build/tools/releasetools/ota_from_target_files
 	@echo "Package OTA: $@"
 	$(hide) PATH=$(foreach p,$(INTERNAL_USERIMAGES_BINARY_PATHS),$(p):)$$PATH MKBOOTIMG=$(MKBOOTIMG) \

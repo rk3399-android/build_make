@@ -132,7 +132,6 @@ PRODUCT_PACKAGES += \
     liblzma.vndk-sp\
     libz.vndk-sp\
 
-
 PRODUCT_COPY_FILES += \
     device/generic/goldfish/init.ranchu-core.sh:vendor/bin/init.ranchu-core.sh \
     device/generic/goldfish/init.ranchu-net.sh:vendor/bin/init.ranchu-net.sh \
